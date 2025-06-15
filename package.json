@@ -1,0 +1,22 @@
+{
+  "name": "mysql-binlog-to-mongodb",
+  "version": "1.0.0",
+  "description": "Service to consume MySQL binlog events from RabbitMQ and store them in MongoDB",
+  "main": "consumer.js",
+  "scripts": {
+    "start": "node src/consumer.js",
+    "monitor": "node src/monitor_changes.js",
+    "worker": "node src/upsert_worker.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.3",
+    "argparse": "^2.0.1",
+    "mongodb": "^5.1.0",
+    "mysql2": "^3.6.0",
+    "winston": "^3.8.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

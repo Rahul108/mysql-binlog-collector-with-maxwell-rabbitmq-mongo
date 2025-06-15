@@ -1,0 +1,141 @@
+services:
+  # MySQL database service
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: sample_db
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB service
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ service
+  rabbitmq:
+    image: rabbitmq:3.11-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Maxwell service to capture MySQL binlog events
+  maxwell:
+    image: zendesk/maxwell:latest
+    container_name: maxwell
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./docker/maxwell/config.properties:/app/config.properties
+    # Use the correct command format for Maxwell
+    command: bin/maxwell --config=/app/config.properties
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=maxwell
+      - MYSQL_PASSWORD=maxwell123
+
+  # RabbitMQ to MongoDB consumer service (Node.js)
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: consumer
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - RABBITMQ_EXCHANGE=maxwell
+      - RABBITMQ_QUEUE=maxwell_consumer
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - MONGODB_DB=binlog_replica
+      - MONGODB_COLLECTION=changes
+    command: ["node", "consumer.js"]
+
+  # Monitoring service to watch changes in MongoDB
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: monitor
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/
+      - MONGODB_DB=binlog_replica
+      - MONGODB_COLLECTION=changes
+    command: ["node", "monitor_changes.js"]
+
+  # Upsert worker service for testing
+  upsert-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: upsert-worker
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpassword
+      - MYSQL_DATABASE=sample_db
+    # Use sleep infinity to keep container running
+    command: ["sh", "-c", "echo 'Upsert worker ready. Use docker-compose exec upsert-worker node /app/upsert_worker.js --operations N --interval N to run tests' && sleep infinity"]
+    stdin_open: true  # Keep STDIN open
+    tty: true         # Allocate a pseudo-TTY
+
+volumes:
+  mysql_data:
+  mongodb_data:
+  rabbitmq_data:
