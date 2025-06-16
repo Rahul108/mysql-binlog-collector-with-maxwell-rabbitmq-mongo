@@ -42,6 +42,11 @@ You can run the upsert worker manually to perform test operations:
 docker compose exec upsert-worker node /app/upsert_worker.js --operations 10 --interval 2
 ```
 
+for running parallel_upsert script
+```bash
+docker compose exec -e CONCURRENCY=20 upsert-worker node /app/parallel_upsert.js 100000
+```
+
 This will perform 10 random operations (insert, update, upsert, delete) with a 2-second interval between operations.
 
 ### 3. Watch changes in real-time
