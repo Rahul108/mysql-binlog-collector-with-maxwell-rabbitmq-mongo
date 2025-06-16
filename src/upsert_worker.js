@@ -228,39 +228,58 @@ async function deleteUser(connection, userId = null) {
 }
 
 /**
- * Run a series of database operations
+ * Run a series of database operations with parallel execution
  */
-async function runOperations(numOperations = 10, interval = 2.0) {
+async function runOperations(numOperations = 10, interval = 2.0, concurrency = 5) {
   const connection = await connectToMySQL();
   
   try {
-    for (let i = 0; i < numOperations; i++) {
-      const operations = ['insert', 'update', 'upsert', 'delete'];
-      const operation = operations[Math.floor(Math.random() * operations.length)];
+    logger.info(`Starting operations with concurrency level: ${concurrency}`);
+    
+    // Process operations in batches based on concurrency
+    for (let i = 0; i < numOperations; i += concurrency) {
+      const batchSize = Math.min(concurrency, numOperations - i);
+      logger.info(`Running batch ${Math.floor(i/concurrency) + 1} with ${batchSize} operations in parallel`);
       
-      if (operation === 'insert') {
-        await performInsert(connection);
-      } else if (operation === 'update') {
-        await performUpdate(connection);
-      } else if (operation === 'upsert') {
-        // 50% chance to use an existing email for an update
-        if (Math.random() < 0.5) {
-          const [rows] = await connection.execute('SELECT email FROM users ORDER BY RAND() LIMIT 1');
+      // Create an array of operation promises to execute in parallel
+      const operationPromises = [];
+      
+      for (let j = 0; j < batchSize; j++) {
+        operationPromises.push((async () => {
+          const operations = ['insert', 'update', 'upsert', 'delete'];
+          const operation = operations[Math.floor(Math.random() * operations.length)];
           
-          if (rows.length > 0) {
-            await performUpsert(connection, rows[0].email);
-          } else {
-            await performUpsert(connection);
+          if (operation === 'insert') {
+            return await performInsert(connection);
+          } else if (operation === 'update') {
+            return await performUpdate(connection);
+          } else if (operation === 'upsert') {
+            // 50% chance to use an existing email for an update
+            if (Math.random() < 0.5) {
+              const [rows] = await connection.execute('SELECT email FROM users ORDER BY RAND() LIMIT 1');
+              
+              if (rows.length > 0) {
+                return await performUpsert(connection, rows[0].email);
+              } else {
+                return await performUpsert(connection);
+              }
+            } else {
+              return await performUpsert(connection);
+            }
+          } else if (operation === 'delete') {
+            return await deleteUser(connection);
           }
-        } else {
-          await performUpsert(connection);
-        }
-      } else if (operation === 'delete') {
-        await deleteUser(connection);
+        })());
       }
       
-      // Sleep between operations
-      if (i < numOperations - 1) {
+      // Execute all operations in this batch in parallel
+      logger.info(`Executing batch ${Math.floor(i/concurrency) + 1} with ${batchSize} parallel operations...`);
+      await Promise.all(operationPromises);
+      logger.info(`Completed batch ${Math.floor(i/concurrency) + 1}`);
+      
+      // Sleep between batches
+      if (i + batchSize < numOperations) {
+        logger.info(`Batch ${Math.floor(i/concurrency) + 1} completed. Waiting ${interval} seconds before next batch...`);
         await new Promise(resolve => setTimeout(resolve, interval * 1000));
       }
     }
@@ -282,12 +301,14 @@ async function main() {
   });
   
   parser.add_argument('--operations', {
+    dest: 'operations',
     type: 'int',
     default: 10,
     help: 'Number of operations to perform'
   });
   
   parser.add_argument('--interval', {
+    dest: 'interval',
     type: 'float',
     default: 2.0,
     help: 'Interval between operations in seconds'
@@ -295,8 +316,11 @@ async function main() {
   
   const args = parser.parse_args();
   
-  logger.info(`Starting worker with ${args.operations} operations and ${args.interval}s interval`);
-  await runOperations(args.operations, args.interval);
+  // Handle concurrency through environment variable or default to 5
+  const concurrency = parseInt(process.env.CONCURRENCY || '5');
+  
+  logger.info(`Starting worker with ${args.operations} operations, ${args.interval}s interval, and ${concurrency} concurrent operations`);
+  await runOperations(args.operations, args.interval, concurrency);
 }
 
 // Start the application
